@@ -1,0 +1,28 @@
+{
+  "vuln-1": {
+    "id": "vuln-1",
+    "title": "Plugin de Formularios <= 1.2.0 - XSS almacenado no autenticado",
+    "cve": "CVE-2026-00001",
+    "cvss": {"score": 7.2, "rating": "High"},
+    "informational": false,
+    "references": ["https://www.wordfence.com/threat-intel/vulnerabilities/id/vuln-1"],
+    "software": [{
+      "type": "plugin", "slug": "formularios",
+      "affected_versions": {"* - 1.2.0": {"from_version": "*", "from_inclusive": true, "to_version": "1.2.0", "to_inclusive": true}},
+      "patched_versions": ["1.2.1"]
+    }]
+  },
+  "vuln-2": {
+    "id": "vuln-2",
+    "title": "Galeria <= 3.0.0 - CSRF",
+    "cve": "CVE-2026-00002",
+    "cvss": {"score": 4.3, "rating": "Medium"},
+    "informational": false,
+    "references": [],
+    "software": [{
+      "type": "plugin", "slug": "galeria",
+      "affected_versions": {"* - 3.0.0": {"from_version": "*", "from_inclusive": true, "to_version": "3.0.0", "to_inclusive": true}},
+      "patched_versions": ["3.0.1"]
+    }]
+  }
+}
