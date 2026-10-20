@@ -1,0 +1,39 @@
+# Reglas para el .htaccess del web root. Van ANTES del bloque de WordPress.
+# nx-canary.php se copia a la raiz del web root.
+
+# Ruta del config.json compartido con los scripts (opcional; por defecto el
+# canary busca <carpeta padre del web root>/nx-kit/config.json).
+# SetEnv NX_CONFIG /home/USUARIO/nx-kit/config.json
+
+# BEGIN NexaSec Canary
+# Rutas de respaldo que los escaneres prueban todos los dias. Ninguna deberia
+# existir en un sitio sano, asi que cualquier golpe es reconocimiento. Todas
+# responden el mismo 404 no cacheable.
+#
+# Senuelo critico: si alguna vez un respaldo real quedo expuesto, su URL exacta
+# se agrega aqui y su parte aleatoria va en "senuelo_critico" del config.json.
+# Un golpe en esa URL no es ruido: alguien la capturo mientras estuvo expuesta.
+#
+# Ojo: ai1wm-backups y updraft son donde esos plugins guardan respaldos reales.
+# Con estas reglas no se descargan por URL directa ni siquiera desde wp-admin;
+# es lo que se busca (los respaldos deben salir del servidor por otro camino).
+<IfModule mod_rewrite.c>
+RewriteEngine On
+RewriteRule ^(backup|backups|site|sitio|web|www|wordpress|wp|db|database|dump|respaldo|respaldos)\.(zip|rar|7z|tar|tgz|tar\.gz|sql|sql\.gz)$ nx-canary.php [L,NC]
+RewriteRule ^(wp-content/)?wp-content\.(zip|tar|tar\.gz|tgz)$ nx-canary.php [L,NC]
+RewriteRule ^[^/]+\.wpress$ nx-canary.php [L,NC]
+RewriteRule ^wp-content/(ai1wm-backups|updraft|backups-dup-lite|backup-db)/ nx-canary.php [L,NC]
+RewriteRule ^wp-content/debug\.log$ nx-canary.php [L,NC]
+RewriteRule ^wp-config\.php\.(bak|old|orig|save|swp|txt|zip)$ nx-canary.php [L,NC]
+RewriteRule ^\.env$ nx-canary.php [L,NC]
+</IfModule>
+# END NexaSec Canary
+
+# BEGIN NexaSec Versiones
+# Complemento de nx-versiones.php: los readme.txt de plugins y temas delatan la
+# version exacta instalada.
+<IfModule mod_rewrite.c>
+RewriteRule ^wp-content/(plugins|themes)/[^/]+/readme\.txt$ - [F,NC]
+RewriteRule ^readme\.html$ - [F,NC]
+</IfModule>
+# END NexaSec Versiones

@@ -19,5 +19,9 @@
   "escalar_dias": 7,
   "escalar_excluir": [
     "198.51.100.0/24"
-  ]
+  ],
+  "webhook_canary": "https://n8n.ejemplo.cl/webhook/nx-canary",
+  "throttle": 300,
+  "senuelo_critico": "",
+  "ip_cliente": "remote_addr"
 }
