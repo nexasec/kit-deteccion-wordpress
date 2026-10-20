@@ -12,5 +12,12 @@
   "origen_ip": "198.51.100.10",
   "wordfence_api_key": "<CLAVE_WORDFENCE>",
   "webhook_vigia": "https://n8n.ejemplo.cl/webhook/nx-vigia",
-  "whois_nic_chile": true
+  "whois_nic_chile": true,
+  "prefijo_tabla": "wp_",
+  "webhook_escalar": "https://n8n.ejemplo.cl/webhook/nx-escalar",
+  "escalar_ventana_h": 24,
+  "escalar_dias": 7,
+  "escalar_excluir": [
+    "198.51.100.0/24"
+  ]
 }
