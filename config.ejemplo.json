@@ -7,5 +7,6 @@
     "CF-Access-Client-Id": "<ID_SERVICE_TOKEN>",
     "CF-Access-Client-Secret": "<SECRETO_SERVICE_TOKEN>"
   },
-  "push_url": "https://kuma.ejemplo.cl/api/push/<TOKEN_KUMA>"
+  "push_url": "https://kuma.ejemplo.cl/api/push/<TOKEN_KUMA>",
+  "webhook_watchdog": "https://n8n.ejemplo.cl/webhook/nx-watchdog"
 }
