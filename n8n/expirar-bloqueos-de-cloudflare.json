@@ -1,0 +1,217 @@
+{
+  "name": "Expirar bloqueos de Cloudflare",
+  "active": false,
+  "nodes": [
+    {
+      "id": "nx-exp-cron",
+      "name": "Cada dia 04:30",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -240,
+        0
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "triggerAtHour": 4,
+              "triggerAtMinute": 30
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "nx-exp-parametros",
+      "name": "Parametros",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -20,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Zone ID del sitio, el mismo del workflow de escalado.\nconst ZONE_TAG = '<CF_ZONE_ID>';\nreturn [{ json: { zone: ZONE_TAG, hoy: new Date().toISOString().slice(0, 10) } }];"
+      }
+    },
+    {
+      "id": "nx-exp-listar",
+      "name": "Listar reglas",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        200,
+        0
+      ],
+      "parameters": {
+        "url": "=https://api.cloudflare.com/client/v4/zones/{{ $json.zone }}/firewall/access_rules/rules?per_page=500&page=1",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 20000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "<ID_CREDENCIAL>",
+          "name": "Cloudflare"
+        }
+      }
+    },
+    {
+      "id": "nx-exp-vencidas",
+      "name": "Vencidas",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        420,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const p = $('Parametros').first().json;\nconst r = $json;\n\n// Si Cloudflare no responde bien, fallar con ruido: un job de vencimiento\n// roto en silencio deja bloqueos acumulandose para siempre.\nif (r.success !== true) {\n  throw new Error('Cloudflare no listo las reglas: ' + JSON.stringify(r.errors || r).slice(0, 300));\n}\n\n// Solo toca las reglas que creo el escalador; las manuales no se tocan nunca.\nconst vencidas = (r.result || [])\n  .filter((x) => typeof x.notes === 'string' && x.notes.startsWith('nx-escalado'))\n  .map((x) => ({\n    id: x.id,\n    ip: x.configuration && x.configuration.value,\n    exp: (x.notes.match(/exp=(\\d{4}-\\d{2}-\\d{2})/) || [])[1],\n  }))\n  .filter((x) => x.exp && x.exp <= p.hoy);\n\n// Sin vencidas, la lista vacia detiene el flujo: no hay nada que avisar.\nreturn vencidas.map((v) => ({ json: { ...v, zone: p.zone } }));"
+      }
+    },
+    {
+      "id": "nx-exp-borrar",
+      "name": "Retirar regla",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        640,
+        0
+      ],
+      "parameters": {
+        "method": "DELETE",
+        "url": "=https://api.cloudflare.com/client/v4/zones/{{ $json.zone }}/firewall/access_rules/rules/{{ $json.id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "<ID_CREDENCIAL>",
+          "name": "Cloudflare"
+        }
+      }
+    },
+    {
+      "id": "nx-exp-resumen",
+      "name": "Resumen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        860,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const retiradas = $('Vencidas').all().map((i) => i.json);\nconst texto = [\n  'Cloudflare: ' + retiradas.length + ' bloqueo(s) vencido(s) retirado(s)',\n  '',\n  ...retiradas.map((v) => '- ' + v.ip + ' (vencia ' + v.exp + ')'),\n].join('\\n');\nreturn [{ json: { texto } }];"
+      }
+    },
+    {
+      "id": "nx-exp-telegram",
+      "name": "Notificar",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1080,
+        0
+      ],
+      "parameters": {
+        "chatId": "<TELEGRAM_CHAT_ID>",
+        "text": "={{ $json.texto }}",
+        "additionalFields": {}
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "<ID_CREDENCIAL>",
+          "name": "Telegram"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Cada dia 04:30": {
+      "main": [
+        [
+          {
+            "node": "Parametros",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parametros": {
+      "main": [
+        [
+          {
+            "node": "Listar reglas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Listar reglas": {
+      "main": [
+        [
+          {
+            "node": "Vencidas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vencidas": {
+      "main": [
+        [
+          {
+            "node": "Retirar regla",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Retirar regla": {
+      "main": [
+        [
+          {
+            "node": "Resumen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resumen": {
+      "main": [
+        [
+          {
+            "node": "Notificar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "errorWorkflow": "<ID_WORKFLOW_ERRORES>",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  }
+}

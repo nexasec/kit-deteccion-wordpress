@@ -1,0 +1,38 @@
+{
+  "id": "AbCdEf123456",
+  "name": "Sitio - Alerta de ejemplo",
+  "active": true,
+  "versionId": "11111111-2222-3333-4444-555555555555",
+  "meta": {"instanceId": "deadbeef"},
+  "pinData": {"Webhook": [{"json": {"ip": "203.0.113.1"}}]},
+  "tags": [{"name": "interno"}],
+  "nodes": [
+    {
+      "id": "n1", "name": "Webhook", "webhookId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      "type": "n8n-nodes-base.webhook", "typeVersion": 2, "position": [0, 0],
+      "parameters": {"httpMethod": "POST", "path": "nx-ejemplo", "authentication": "headerAuth"},
+      "credentials": {"httpHeaderAuth": {"id": "CRED123", "name": "Header Auth de produccion"}}
+    },
+    {
+      "id": "n2", "name": "Componer", "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [200, 0],
+      "parameters": {"jsCode": "// Zona de sitio-real.example\nconst ZONA = '0123456789abcdef0123456789abcdef';\nconst OTRA = 'fedcba9876543210fedcba9876543210';\nreturn [{json: {quien: 'Persona Real'}}];"}
+    },
+    {
+      "id": "n3", "name": "Cloudflare", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4, "position": [400, 0],
+      "parameters": {"url": "https://api.cloudflare.com/client/v4/zones/0123456789abcdef0123456789abcdef/rulesets"},
+      "credentials": {"httpHeaderAuth": {"id": "CRED456", "name": "Cloudflare escritura"}}
+    },
+    {
+      "id": "n4", "name": "Notificar", "type": "n8n-nodes-base.telegram", "typeVersion": 1, "position": [600, 0],
+      "webhookId": "ffffffff-0000-1111-2222-333333333333",
+      "parameters": {"chatId": "123456789", "text": "={{ $json.texto }}"},
+      "credentials": {"telegramApi": {"id": "CRED789", "name": "Telegram account"}}
+    }
+  ],
+  "connections": {
+    "Webhook": {"main": [[{"node": "Componer", "type": "main", "index": 0}]]},
+    "Componer": {"main": [[{"node": "Cloudflare", "type": "main", "index": 0}]]},
+    "Cloudflare": {"main": [[{"node": "Notificar", "type": "main", "index": 0}]]}
+  },
+  "settings": {"executionOrder": "v1", "errorWorkflow": "ErrWf999"}
+}

@@ -1,0 +1,400 @@
+{
+  "name": "Escalar bloqueos a Cloudflare",
+  "active": false,
+  "nodes": [
+    {
+      "id": "5fd76895-7891-4926-bfcc-b997e4cf39fc",
+      "name": "Webhook Escalador",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -96,
+        -240
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "nx-escalar",
+        "authentication": "headerAuth",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "<ID_CREDENCIAL>",
+          "name": "Header Auth"
+        }
+      }
+    },
+    {
+      "id": "29d06fbf-1f24-435c-bab3-b1e71e479036",
+      "name": "Normalizar",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        96,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// El escalador manda un candidato por peticion: cada aprobacion es una\n// ejecucion independiente que espera su propia respuesta.\nconst c = $json.body ?? $json;\nif (!c.ip) {\n  throw new Error('Payload del escalador sin ip');\n}\nreturn [{ json: c }];"
+      }
+    },
+    {
+      "id": "d92160e4-9f16-4963-935d-97aa18d3421a",
+      "name": "AbuseIPDB",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput",
+      "position": [
+        448,
+        0
+      ],
+      "parameters": {
+        "url": "https://api.abuseipdb.com/api/v2/check",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "ipAddress",
+              "value": "={{ $json.ip }}"
+            },
+            {
+              "name": "maxAgeInDays",
+              "value": "90"
+            }
+          ]
+        },
+        "sendHeaders": false,
+        "options": {
+          "timeout": 8000
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "<ID_CREDENCIAL>",
+          "name": "AbuseIPDB"
+        }
+      }
+    },
+    {
+      "id": "dcdeb37a-fba2-4eb0-9d45-2fa605c17b16",
+      "name": "Mensaje",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        336,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const c = $('Normalizar').first().json;\n\n// \"Pedir aprobacion\" (sendAndWait) siempre envia con parse_mode Markdown y no se puede cambiar\n// (n8n lo fija en createSendAndWaitMessageBody). Un \"_\", \"*\", \"`\" o \"[\" suelto en una ruta o un motivo\n// hacia fallar el mensaje, y con el la propuesta. Ademas Telegram autoenlaza dominios e IPs.\n// - md():    escapa los caracteres de Markdown y corta el autolink con U+2060 (texto libre).\n// - code():  valores tecnicos entre backticks: no se enlazan y se copian limpios.\nconst md = v => String(v ?? '')\n  .replace(/([_*`\\[])/g, '\\\\$1')\n  .replace(/([A-Za-z0-9-])\\.(?=[A-Za-z0-9-])/g, '$1.⁠')\n  .replace(/:\\/\\//g, ':⁠//')\n  .replace(/@/g, '@⁠');\nconst code = v => '`' + String(v ?? '').replace(/`/g, \"'\").slice(0, 160) + '`';\n\n// Cada enriquecimiento es opcional: si una API falla o no tiene datos, la\n// propuesta sale igual. Prefiero una alerta pobre a ninguna.\nconst leer = (nodo) => { try { return $(nodo).first().json ?? {}; } catch (err) { return {}; } };\nconst abuse = leer('AbuseIPDB').data ?? {};\nconst gn = leer('GreyNoise');\nconst sh = leer('Shodan InternetDB');\n\nconst score = abuse.abuseConfidenceScore;\nconst origen = [abuse.countryCode, abuse.isp || abuse.domain].filter(Boolean).join(', ');\n\nconst l = [\n  (c.prueba ? '\\\\[PRUEBA] ' : '') + '*Propuesta de bloqueo en Cloudflare*',\n  '',\n  'IP: ' + code(c.ip) + (origen ? ' (' + md(origen) + ')' : ''),\n  'AbuseIPDB: ' + (Number.isFinite(Number(score)) && score !== null && score !== undefined ? Number(score) : 'n/d') + '/100' +\n    (abuse.totalReports ? ' - ' + Number(abuse.totalReports) + ' reportes' : ''),\n];\n\n// GreyNoise separa el ruido de fondo de internet de lo dirigido contra ti:\n// es lo que decide si esto merece tu atencion o es un bot mas.\nif (gn.classification) {\n  l.push('GreyNoise: ' + md(gn.classification)\n    + (gn.name && gn.name !== 'unknown' ? ' - ' + md(String(gn.name).slice(0, 80)) : '')\n    + (gn.noise ? ' (escanea internet entero)' : ' (NO es escaneo masivo: dirigido)'));\n} else {\n  l.push('GreyNoise: sin datos (no observada escaneando internet)');\n}\n\n// Shodan dice que ES la maquina atacante: casi siempre un servidor ajeno comprometido.\nif (Array.isArray(sh.ports) && sh.ports.length) {\n  const partes = ['puertos ' + sh.ports.slice(0, 8).map(Number).join(', ')];\n  if (sh.cpes && sh.cpes.length) partes.push(sh.cpes.slice(0, 2).map(code).join(', '));\n  if (sh.vulns && sh.vulns.length) partes.push(sh.vulns.length + ' CVE conocidos');\n  if (sh.hostnames && sh.hostnames.length) partes.push(code(sh.hostnames[0]));\n  l.push('Shodan: ' + partes.join(' - '));\n}\n\nl.push('', 'Motivos:', ...(c.motivos || []).slice(0, 10).map((m) => '- ' + md(String(m).slice(0, 300))));\nif (c.rutas && c.rutas.length) {\n  l.push('', 'Rutas: ' + c.rutas.slice(0, 8).map(code).join(', ') + (c.rutas.length > 8 ? ' y ' + (c.rutas.length - 8) + ' mas' : ''));\n}\nif (c.reglas && c.reglas.length) l.push('Reglas WAF: ' + c.reglas.slice(0, 8).map(code).join(', '));\nif (c.primera) l.push('', 'Actividad: ' + md(c.primera) + ' -> ' + md(c.ultima));\nl.push('', c.dias > 0\n  ? 'Si apruebas: bloqueo en el borde durante ' + Number(c.dias) + ' dias; despues se retira solo.'\n  : 'Si apruebas: se crea la regla y el job de vencimiento la retira hoy mismo.');\nif (c.pendientes) l.push('(' + Number(c.pendientes) + ' candidatos mas esperan la proxima corrida)');\nl.push('Sin respuesta en 24 h no se bloquea nada.');\n\nreturn [{ json: { ...c, abuse_score: score ?? null, mensaje: l.join('\\n') } }];\n"
+      }
+    },
+    {
+      "id": "42fa1098-41fb-4f7d-b879-39129b744b20",
+      "name": "Pedir aprobacion",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        624,
+        0
+      ],
+      "parameters": {
+        "operation": "sendAndWait",
+        "chatId": "<TELEGRAM_CHAT_ID>",
+        "message": "={{ $json.mensaje }}",
+        "approvalOptions": {
+          "values": {
+            "approvalType": "double",
+            "approveLabel": "Bloquear",
+            "disapproveLabel": "Ignorar"
+          }
+        },
+        "options": {
+          "limitWaitTime": {
+            "values": {
+              "resumeAmount": 24
+            }
+          },
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "<ID_CREDENCIAL>",
+          "name": "Telegram"
+        }
+      }
+    },
+    {
+      "id": "88a44ac3-57ab-4664-8d36-db6790250e9d",
+      "name": "Preparar regla",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        832,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Solo un 'Bloquear' explicito aplica la regla. 'Ignorar' o 24 h sin\n// respuesta terminan aqui: devolver una lista vacia detiene el flujo.\nif ($json.data?.approved !== true) {\n  return [];\n}\n\nconst c = $('Mensaje').first().json;\n\n// Zone ID del sitio (Overview del dominio en Cloudflare). No es secreto.\nconst ZONE_TAG = '<CF_ZONE_ID>';\n\nconst exp = new Date(Date.now() + c.dias * 86400000).toISOString().slice(0, 10);\n\nreturn [{\n  json: {\n    ip: c.ip,\n    exp,\n    zone: ZONE_TAG,\n    cuerpo: {\n      mode: 'block',\n      configuration: { target: c.version === 6 ? 'ip6' : 'ip', value: c.ip },\n      // El job de vencimiento reconoce las reglas propias por este prefijo.\n      notes: 'nx-escalado exp=' + exp + ' | ' + ((c.motivos || [])[0] || '').slice(0, 120),\n    },\n  },\n}];"
+      }
+    },
+    {
+      "id": "705b9a41-15c2-4df5-bdda-aa32c58927bd",
+      "name": "Crear regla en Cloudflare",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1024,
+        0
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.cloudflare.com/client/v4/zones/{{ $json.zone }}/firewall/access_rules/rules",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.cuerpo) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 20000
+        }
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "<ID_CREDENCIAL>",
+          "name": "Cloudflare"
+        }
+      }
+    },
+    {
+      "id": "500c87bf-db78-43c9-ad22-93ef3a8dfedf",
+      "name": "Resultado",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1232,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const p = $('Preparar regla').first().json;\nconst r = $json;\nconst esc = v => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\n\n// La API de Cloudflare informa el resultado en el cuerpo (success/errors),\n// no solo en el status: por eso se lee aqui en vez de fiarse del HTTP.\nlet texto;\nif (r.success === true) {\n  texto = '✅ Bloqueada <code>' + esc(p.ip) + '</code> en el borde de Cloudflare hasta ' + esc(p.exp) + '.';\n} else {\n  const errs = (r.errors || []).map((e) => e.message || e.code).join('; ');\n  texto = /duplicate|already exists/i.test(errs)\n    ? '<code>' + esc(p.ip) + '</code> ya tenía una regla en Cloudflare; no se duplicó.'\n    : '❌ NO se pudo bloquear <code>' + esc(p.ip) + '</code>: ' + esc(errs || JSON.stringify(r).slice(0, 200));\n}\nreturn [{ json: { texto } }];\n"
+      }
+    },
+    {
+      "id": "044a017a-387e-4e34-b23c-f38ff8a31b61",
+      "name": "Confirmar",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "position": [
+        1424,
+        0
+      ],
+      "parameters": {
+        "chatId": "<TELEGRAM_CHAT_ID>",
+        "text": "={{ $json.texto }}",
+        "additionalFields": {
+          "parse_mode": "HTML",
+          "disable_web_page_preview": true,
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "<ID_CREDENCIAL>",
+          "name": "Telegram"
+        }
+      }
+    },
+    {
+      "id": "nx-esc-greynoise",
+      "name": "GreyNoise",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput",
+      "position": [
+        -48,
+        0
+      ],
+      "parameters": {
+        "url": "=https://api.greynoise.io/v3/community/{{ $('Normalizar').first().json.ip }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 8000
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "<ID_CREDENCIAL>",
+          "name": "GreyNoise"
+        }
+      }
+    },
+    {
+      "id": "nx-esc-shodan",
+      "name": "Shodan InternetDB",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput",
+      "position": [
+        224,
+        0
+      ],
+      "parameters": {
+        "url": "=https://internetdb.shodan.io/{{ $('Normalizar').first().json.ip }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 8000
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook Escalador": {
+      "main": [
+        [
+          {
+            "node": "Normalizar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalizar": {
+      "main": [
+        [
+          {
+            "node": "AbuseIPDB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AbuseIPDB": {
+      "main": [
+        [
+          {
+            "node": "GreyNoise",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mensaje": {
+      "main": [
+        [
+          {
+            "node": "Pedir aprobacion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pedir aprobacion": {
+      "main": [
+        [
+          {
+            "node": "Preparar regla",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar regla": {
+      "main": [
+        [
+          {
+            "node": "Crear regla en Cloudflare",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Crear regla en Cloudflare": {
+      "main": [
+        [
+          {
+            "node": "Resultado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resultado": {
+      "main": [
+        [
+          {
+            "node": "Confirmar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GreyNoise": {
+      "main": [
+        [
+          {
+            "node": "Shodan InternetDB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Shodan InternetDB": {
+      "main": [
+        [
+          {
+            "node": "Mensaje",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "errorWorkflow": "<ID_WORKFLOW_ERRORES>",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  }
+}

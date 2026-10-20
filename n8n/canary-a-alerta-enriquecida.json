@@ -1,0 +1,230 @@
+{
+  "name": "Canary a alerta enriquecida",
+  "active": false,
+  "nodes": [
+    {
+      "id": "8c94024b-da15-408e-9626-24fbdf980fcb",
+      "name": "Webhook Canary",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        176,
+        -208
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "nx-canary",
+        "authentication": "headerAuth",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "<ID_CREDENCIAL>",
+          "name": "Header Auth"
+        }
+      }
+    },
+    {
+      "id": "086a20bc-1d15-451c-b579-0fb16280efeb",
+      "name": "Clasificar",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        384,
+        -208
+      ],
+      "parameters": {
+        "jsCode": "// El canary manda el evento en el body. Todo lo que viene de la peticion (uri, ua, referer, host)\n// lo controla quien toco el senuelo: aqui solo se normaliza y se recorta; el escape va al componer.\nconst e = $json.body ?? $json;\nconst txt = (v, n) => { const s = v === undefined || v === null ? '' : String(v); return s.length > n ? s.slice(0, n) + '…' : s; };\n\nreturn [{\n  json: {\n    ts: txt(e.ts, 40),\n    origen: txt(e.origen, 40),\n    severidad: e.severidad === 'critico' ? 'critico' : 'informativo',\n    host: txt(e.host, 120),\n    metodo: txt(e.metodo, 12),\n    uri: txt(e.uri, 400),\n    uri_recortada: String(e.uri ?? '').length > 400,\n    ip: txt(e.ip, 64),\n    pais: txt(e.pais, 8),\n    ua: txt(e.ua, 300),\n    referer: txt(e.referer, 300),\n    cf_ray: txt(e.cf_ray, 40),\n    // Solo false explicito cuenta como \"directo\": un evento antiguo sin el campo no debe alarmar.\n    via_cloudflare: e.via_cloudflare === true ? true : (e.via_cloudflare === false ? false : null),\n    cabecera_falsificada: e.cabecera_falsificada ? txt(e.cabecera_falsificada, 64) : null,\n  }\n}];\n"
+      }
+    },
+    {
+      "id": "18d2a2ec-c545-4ec1-a5bf-2f10df1b3abb",
+      "name": "AbuseIPDB",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput",
+      "position": [
+        608,
+        -208
+      ],
+      "parameters": {
+        "url": "https://api.abuseipdb.com/api/v2/check",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "ipAddress",
+              "value": "={{ $json.ip }}"
+            },
+            {
+              "name": "maxAgeInDays",
+              "value": "90"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 8000
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "<ID_CREDENCIAL>",
+          "name": "AbuseIPDB"
+        }
+      }
+    },
+    {
+      "id": "e2aa7cf6-5370-4139-b4ca-014ef254de5a",
+      "name": "GreyNoise",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput",
+      "position": [
+        832,
+        -208
+      ],
+      "parameters": {
+        "url": "=https://api.greynoise.io/v3/community/{{ $('Clasificar').first().json.ip }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 8000
+        },
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "<ID_CREDENCIAL>",
+          "name": "GreyNoise"
+        }
+      }
+    },
+    {
+      "id": "e48473a4-299d-4b5c-8a5f-dcbd50b4cf91",
+      "name": "Componer alerta",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1056,
+        -208
+      ],
+      "parameters": {
+        "jsCode": "const c = $('Clasificar').first().json;\n\n// Telegram interpreta HTML: todo valor del evento se escapa. Ademas autoenlaza dominios, IPs, URLs y\n// correos en texto plano aunque haya parse_mode, asi que lo que no va en <code> lleva un word joiner\n// (U+2060) tras cada punto, :// y @. Sin esto, un User-Agent con un \"<\" suelto hacia fallar la alerta\n// y uno con <a href> dejaba un enlace clicable dentro del canal de alertas.\nconst esc = v => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst plano = v => esc(String(v ?? '').replace(/([A-Za-z0-9-])\\.(?=[A-Za-z0-9-])/g, '$1.⁠').replace(/:\\/\\//g, ':⁠//').replace(/@/g, '@⁠'));\nconst vacio = v => v === null || v === undefined || v === '' || v === '-';\n\n// Los enriquecimientos van con onError=continue: prefiero una alerta pobre a ninguna.\nlet abuse = {};\nlet gn = {};\ntry { abuse = $('AbuseIPDB').first().json?.data ?? {}; } catch (err) {}\ntry { gn = $('GreyNoise').first().json ?? {}; } catch (err) {}\n\nconst score = Number.isFinite(Number(abuse.abuseConfidenceScore)) && abuse.abuseConfidenceScore !== null ? Number(abuse.abuseConfidenceScore) + '/100' : 'n/d';\nconst pais = abuse.countryCode || (vacio(c.pais) ? 'n/d' : c.pais);\nconst clase = gn.classification ?? 'n/d';\n\nconst wpress = c.severidad === 'critico';\nconst falsa = !vacio(c.cabecera_falsificada);\nconst directo = c.via_cloudflare === false;\nconst dirigido = wpress || falsa || directo;\n\nlet titulo;\nlet explicacion;\nif (wpress) {\n  titulo = '\\u{1F6A8} <b>CANARY CRÍTICO — acceso dirigido</b>';\n  explicacion = 'Ese nombre lleva sufijo aleatorio: no se adivina por fuerza bruta. Alguien capturó la URL mientras el archivo estuvo expuesto. Revisar ya.';\n} else if (falsa) {\n  titulo = '\\u{1F6A8} <b>CANARY CRÍTICO — cabecera de Cloudflare falsificada</b>';\n  explicacion = 'Le habló directo al servidor fingiendo venir de Cloudflare, con CF-Connecting-IP <code>' + esc(c.cabecera_falsificada) + '</code>. Conoce la IP real del origen e intenta que se registre otra IP. Revisar ya.';\n} else if (directo) {\n  titulo = '\\u{1F6A8} <b>CANARY CRÍTICO — directo al origen</b>';\n  explicacion = 'La petición no pasó por Cloudflare: quien la hizo conoce la IP real del servidor. Revisar de dónde la sacó (registros DNS antiguos, certificados emitidos, cabeceras de correos salientes).';\n} else {\n  titulo = '\\u{1F440} <b>Canary — sondeo de escáner</b>';\n  explicacion = 'Nombre genérico de respaldo. Casi seguro escaneo masivo automatizado, sin acción inmediata.';\n}\n\nconst hora = (() => {\n  const d = new Date(c.ts);\n  if (isNaN(d)) return null;\n  const p = Object.fromEntries(new Intl.DateTimeFormat('en-GB', { timeZone: 'America/Santiago', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }).formatToParts(d).map(x => [x.type, x.value]));\n  return p.day + '-' + p.month + '-' + p.year + ' ' + p.hour + ':' + p.minute + ':' + p.second;\n})();\n\nconst L = [titulo, ''];\nL.push('<b>URI:</b> <code>' + esc((vacio(c.metodo) ? '' : c.metodo + ' ') + c.uri) + '</code>' + (c.uri_recortada ? ' (recortada)' : ''));\nif (!vacio(c.host)) L.push('<b>Host:</b> <code>' + esc(c.host) + '</code>');\nL.push('<b>IP:</b> <code>' + esc(c.ip) + '</code> (' + plano(pais) + ')');\nL.push('<b>Cloudflare:</b> ' + (c.via_cloudflare === true ? 'sí' : c.via_cloudflare === false ? '<b>NO, directo al origen</b>' : 'n/d'));\nL.push('<b>AbuseIPDB:</b> ' + score);\nL.push('<b>GreyNoise:</b> ' + plano(clase) + (gn.name ? ' — ' + plano(String(gn.name).slice(0, 80)) : ''));\nL.push('<b>User-Agent:</b> ' + plano(c.ua));\nif (!vacio(c.referer)) L.push('<b>Referer:</b> <code>' + esc(c.referer) + '</code>');\nif (!vacio(c.cf_ray)) L.push('<b>CF-Ray:</b> <code>' + esc(c.cf_ray) + '</code>');\nL.push('<b>Hora:</b> ' + (hora ? hora + ' (Chile)' : plano(c.ts)));\nL.push('', explicacion);\n\nreturn [{ json: { ...c, abuse_score: score, greynoise: clase, dirigido, mensaje: L.join('\\n') } }];\n"
+      }
+    },
+    {
+      "id": "4eacfd3e-ab84-4bfd-b2da-61766e11e4c7",
+      "name": "Notificar Telegram",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "position": [
+        1264,
+        -208
+      ],
+      "parameters": {
+        "chatId": "<TELEGRAM_CHAT_ID>",
+        "text": "={{ $json.mensaje }}",
+        "additionalFields": {
+          "parse_mode": "HTML",
+          "disable_web_page_preview": true,
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "<ID_CREDENCIAL>",
+          "name": "Telegram"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook Canary": {
+      "main": [
+        [
+          {
+            "node": "Clasificar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clasificar": {
+      "main": [
+        [
+          {
+            "node": "AbuseIPDB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AbuseIPDB": {
+      "main": [
+        [
+          {
+            "node": "GreyNoise",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GreyNoise": {
+      "main": [
+        [
+          {
+            "node": "Componer alerta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Componer alerta": {
+      "main": [
+        [
+          {
+            "node": "Notificar Telegram",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "errorWorkflow": "<ID_WORKFLOW_ERRORES>",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  }
+}

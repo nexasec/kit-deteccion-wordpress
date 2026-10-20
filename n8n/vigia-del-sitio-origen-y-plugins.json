@@ -1,0 +1,150 @@
+{
+  "name": "Vigia del sitio (origen y plugins)",
+  "active": false,
+  "nodes": [
+    {
+      "id": "nx-vigia-webhook",
+      "name": "Webhook Vigia",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -300,
+        0
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "nx-vigia",
+        "authentication": "headerAuth",
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "<ID_CREDENCIAL>",
+          "name": "Header Auth"
+        }
+      }
+    },
+    {
+      "id": "nx-evaluar",
+      "name": "Evaluar",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -60,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const s = $getWorkflowStaticData('global');\nconst ahora = Date.now();\nconst H = 3600e3;\nconst esc = t => String(t ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst hoy = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Santiago' });\nconst lunes = new Date().toLocaleDateString('en-US', { timeZone: 'America/Santiago', weekday: 'short' }) === 'Mon';\nconst out = [];\nconst avisar = texto => out.push({ json: { texto } });\n\n// n8n decide cuando avisar: el script reporta siempre y aqui se detectan los cambios de estado,\n// para no mandar la misma alerta cada hora.\nconst p = $json.body || {};\n\nif (p.tipo === 'origen') {\n  if (p.prueba) {\n    avisar('\\u{1F9EA} <b>PRUEBA</b> del chequeo de origen (' + esc(p.host) + ')\\n\\n' + (p.fallos || []).map(f => '• ' + esc(f)).join('\\n'));\n    return out;\n  }\n  s.origen_visto = ahora;\n  const antes = s.origen_ok;\n  if (!p.ok) {\n    if (antes !== false || ahora - (s.origen_alerta || 0) > 6 * H) {\n      avisar('\\u{1F6A8} <b>El origen de ' + esc(p.host) + ' dejo de estar protegido</b>\\n\\n' +\n        (p.fallos || []).map(f => '• ' + esc(f)).join('\\n') +\n        '\\n\\nRevisar: Transform Rule \"Autenticacion de origen\" en Cloudflare, bloque \"NexaSec Origen\" del .htaccess, y que Cloudflare no este pausado.');\n      s.origen_alerta = ahora;\n    }\n    s.origen_ok = false;\n  } else {\n    if (antes === false) avisar('✅ Origen de ' + esc(p.host) + ' protegido de nuevo: directo 403, Cloudflare 200.');\n    s.origen_ok = true;\n  }\n  return out;\n}\n\nif (p.tipo === 'plugins') {\n  const vul = (p.vulnerables || []).filter(v => !v.informativo);\n  const linea = v => '• <b>' + esc(v.slug) + '</b> ' + esc(v.version) + ' (' + esc(v.tipo) + ')' + (v.severidad ? ' — ' + esc(v.severidad) + (v.cvss ? ' ' + v.cvss : '') : '') +\n    '\\n  ' + esc(v.titulo) +\n    '\\n  ' + ((v.parche || []).length ? 'Corregido en: ' + esc(v.parche.join(', ')) : 'Sin parche publicado') + (v.cve ? ' · ' + esc(v.cve) : '') +\n    (v.ref ? '\\n  ' + esc(v.ref) : '');\n\n  // Vencimiento del dominio (whois de NIC Chile, desde el servidor del sitio).\n  const diasDominio = p.dominio_vence ? Math.floor((new Date(p.dominio_vence) - ahora) / 86400000) : null;\n  const avisoDominio = () => '\\u{1F310} <b>Renovar ' + esc(p.host) + '</b>: ' +\n    (diasDominio <= 0 ? '<b>VENCIO</b>' : 'vence en <b>' + diasDominio + ' dias</b>') +\n    ' (' + esc(String(p.dominio_vence).slice(0, 10)) + ').\\n' +\n    'Si vence se pierden la web, el correo y todo lo que cuelga del dominio.\\n' +\n    'Renovar en https://www.nic.cl → Mis dominios. Conviene pagar varios anos de una vez.';\n\n  if (p.prueba) {\n    if (diasDominio !== null) avisar('\\u{1F9EA} PRUEBA — asi se vera el aviso de renovacion:\\n\\n' + avisoDominio());\n    avisar('\\u{1F9EA} <b>PRUEBA</b> del vigia de plugins (' + esc(p.host) + ')\\n\\n' + vul.map(linea).join('\\n\\n') +\n      ((p.errores || []).length ? '\\n\\nErrores reportados:\\n' + p.errores.map(e => '• ' + esc(e)).join('\\n') : ''));\n    return out;\n  }\n  s.plugins_visto = ahora;\n\n  if (diasDominio !== null && ([90, 60, 45, 30, 21, 14, 10, 7, 5, 3, 2, 1].includes(diasDominio) || diasDominio <= 0)) {\n    avisar(avisoDominio());\n  }\n\n  const clave = v => v.id + '@' + v.version;\n  const previas = new Set(s.vuln_ids || []);\n  const nuevas = vul.filter(v => !previas.has(clave(v)));\n  if (nuevas.length) {\n    avisar('\\u{1F534} <b>Vulnerabilidades nuevas en ' + esc(p.host) + '</b>\\n\\n' + nuevas.map(linea).join('\\n\\n') +\n      '\\n\\nActualizar desde wp-admin → Plugins. Si no hay parche, evaluar desactivar el plugin.');\n  } else if (vul.length && lunes && s.vuln_recordado !== hoy) {\n    avisar('\\u{1F7E0} <b>Siguen sin parchear</b> en ' + esc(p.host) + '\\n\\n' + vul.map(linea).join('\\n\\n'));\n    s.vuln_recordado = hoy;\n  }\n  if (!vul.length && previas.size) avisar('✅ Ya no quedan vulnerabilidades conocidas en ' + esc(p.host) + '.');\n  s.vuln_ids = vul.map(clave);\n\n  if ((p.errores || []).length && s.plugins_error_dia !== hoy) {\n    avisar('⚠️ <b>Vigia de plugins con problemas</b>\\n' + p.errores.map(e => '• ' + esc(e)).join('\\n'));\n    s.plugins_error_dia = hoy;\n  }\n\n  if (lunes && s.inventario_dia !== hoy && p.feed_registros) {\n    const pend = [...(p.plugins || []), ...(p.temas || [])].filter(x => x.actualizacion);\n    avisar('\\u{1F4CB} <b>Inventario semanal de ' + esc(p.host) + '</b>\\n' +\n      'WordPress ' + esc(p.core) + ' · ' + (p.plugins || []).length + ' plugins · ' + (p.temas || []).length + ' temas\\n' +\n      'Vulnerabilidades conocidas: ' + vul.length + ' (feed Wordfence: ' + p.feed_registros + ' registros)\\n' +\n      (diasDominio !== null ? 'Dominio vence en ' + diasDominio + ' dias (' + esc(String(p.dominio_vence).slice(0, 10)) + ')\\n' : '') +\n      (pend.length ? 'Actualizaciones disponibles: ' + pend.map(x => esc(x.slug) + ' ' + esc(x.version) + '→' + esc(x.actualizacion)).join(', ') + '\\n' : '') +\n      ((p.sin_cobertura || []).length ? '\\nSin registros en el feed (nunca tuvieron fallos publicados, o son premium y hay que vigilarlos a mano):\\n' + p.sin_cobertura.map(x => '• ' + esc(x)).join('\\n') : ''));\n    s.inventario_dia = hoy;\n  }\n  return out;\n}\n\navisar('⚠️ Vigia recibio un payload desconocido: ' + esc(JSON.stringify(p).slice(0, 200)));\nreturn out;\n"
+      }
+    },
+    {
+      "id": "nx-vigia-horario",
+      "name": "Cada hora",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -300,
+        220
+      ],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 1,
+              "triggerAtMinute": 45
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "nx-sensores",
+      "name": "Sensores",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -60,
+        220
+      ],
+      "parameters": {
+        "jsCode": "const s = $getWorkflowStaticData('global');\nconst ahora = Date.now();\nconst H = 3600e3;\nconst esc = t => String(t ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst hoy = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Santiago' });\nconst lunes = new Date().toLocaleDateString('en-US', { timeZone: 'America/Santiago', weekday: 'short' }) === 'Mon';\nconst out = [];\nconst avisar = texto => out.push({ json: { texto } });\n\n// Un sensor que deja de reportar se ve igual que uno que no encuentra nada. Esto los distingue.\nconst chequeos = [\n  ['origen_visto', 3, 'el chequeo de origen (cron horario en el servidor)'],\n  ['plugins_visto', 26, 'el inventario de plugins (cron diario en el servidor)'],\n];\nfor (const [clave, limite, nombre] of chequeos) {\n  const visto = s[clave];\n  if (!visto || ahora - visto <= limite * H) continue;\n  if (ahora - (s[clave + '_alerta'] || 0) < 12 * H) continue;\n  const horas = Math.round((ahora - visto) / H);\n  avisar('⏰ <b>Vigia sin reportar</b>: ' + nombre + ' no llega hace ' + horas + ' h.\\nRevisar crontab y ~/nx-kit/vigia.log en el hosting.');\n  s[clave + '_alerta'] = ahora;\n}\nreturn out;\n"
+      }
+    },
+    {
+      "id": "nx-notificar",
+      "name": "Notificar",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        200,
+        100
+      ],
+      "parameters": {
+        "chatId": "<TELEGRAM_CHAT_ID>",
+        "text": "={{ $json.texto }}",
+        "additionalFields": {
+          "parse_mode": "HTML",
+          "appendAttribution": false
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "<ID_CREDENCIAL>",
+          "name": "Telegram"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook Vigia": {
+      "main": [
+        [
+          {
+            "node": "Evaluar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluar": {
+      "main": [
+        [
+          {
+            "node": "Notificar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cada hora": {
+      "main": [
+        [
+          {
+            "node": "Sensores",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sensores": {
+      "main": [
+        [
+          {
+            "node": "Notificar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "errorWorkflow": "<ID_WORKFLOW_ERRORES>",
+    "timezone": "America/Santiago",
+    "executionOrder": "v1"
+  }
+}

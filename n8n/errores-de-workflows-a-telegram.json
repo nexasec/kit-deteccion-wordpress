@@ -1,0 +1,78 @@
+{
+  "name": "Errores de workflows a Telegram",
+  "active": false,
+  "nodes": [
+    {
+      "id": "nx-err-trigger",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        -200,
+        0
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "nx-err-mensaje",
+      "name": "Mensaje",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        20,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// Se dispara cuando falla cualquier workflow que tenga a este como\n// 'Error Workflow' en su configuracion. Sin esto, un fallo solo queda\n// en el panel de ejecuciones de n8n, donde nadie lo mira.\nconst e = $json.execution || {};\nconst w = $json.workflow || {};\nconst texto = [\n  '\\u26A0\\uFE0F Fallo en n8n',\n  '',\n  'Workflow: ' + (w.name || '?'),\n  'Nodo: ' + (e.lastNodeExecuted || '?'),\n  'Error: ' + String((e.error && e.error.message) || '?').slice(0, 300),\n  e.url ? 'Ejecucion: ' + e.url : '',\n].filter(Boolean).join('\\n');\nreturn [{ json: { texto } }];"
+      }
+    },
+    {
+      "id": "nx-err-telegram",
+      "name": "Notificar",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        240,
+        0
+      ],
+      "parameters": {
+        "chatId": "<TELEGRAM_CHAT_ID>",
+        "text": "={{ $json.texto }}",
+        "additionalFields": {}
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "<ID_CREDENCIAL>",
+          "name": "Telegram"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Mensaje",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mensaje": {
+      "main": [
+        [
+          {
+            "node": "Notificar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
