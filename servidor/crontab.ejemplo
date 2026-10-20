@@ -1,0 +1,10 @@
+# Crontab del usuario del hosting (crontab -e). Los scripts y config.json van en ~/nx-kit/.
+# Los minutos estan corridos a proposito para no coincidir con otros crons a la hora en punto.
+# Sin NX_CONFIG los scripts leen ~/nx-kit/config.json. Si se fija aqui, va con la ruta
+# completa: cron no expande $HOME en las asignaciones de variables.
+# NX_CONFIG=/home/USUARIO/nx-kit/config.json
+
+*/15 * * * * /usr/bin/python3 $HOME/nx-kit/watchdog.py >> $HOME/nx-kit/watchdog.log 2>&1
+7 * * * *    /usr/bin/python3 $HOME/nx-kit/escalador.py >> $HOME/nx-kit/escalador.log 2>&1
+17 * * * *   /usr/bin/python3 $HOME/nx-kit/vigia.py --origen >> $HOME/nx-kit/vigia.log 2>&1
+33 5 * * *   /usr/bin/python3 $HOME/nx-kit/vigia.py --plugins >> $HOME/nx-kit/vigia.log 2>&1

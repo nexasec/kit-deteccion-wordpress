@@ -5,6 +5,19 @@
 # canary busca <carpeta padre del web root>/nx-kit/config.json).
 # SetEnv NX_CONFIG /home/USUARIO/nx-kit/config.json
 
+# BEGIN NexaSec Origen
+# Cierre del origen: solo responde a peticiones que traen la cabecera secreta
+# que agrega una Transform Rule de Cloudflare. Quien encuentre la IP del
+# servidor y le hable directo recibe 403. vigia.py --origen comprueba que esto
+# siga vigente: espera exactamente el cuerpo "Forbidden".
+<IfModule mod_rewrite.c>
+RewriteEngine On
+RewriteCond %{HTTP:<NOMBRE_CABECERA>} !^<VALOR_SECRETO>$
+RewriteRule ^ - [F]
+</IfModule>
+ErrorDocument 403 "Forbidden"
+# END NexaSec Origen
+
 # BEGIN NexaSec Canary
 # Rutas de respaldo que los escaneres prueban todos los dias. Ninguna deberia
 # existir en un sitio sano, asi que cualquier golpe es reconocimiento. Todas
