@@ -1,0 +1,11 @@
+{
+  "dominio": "ejemplo.cl",
+  "raiz_web": "~/ejemplo.cl",
+  "dir_estado": "~/nx-kit",
+  "wp_cli": "/usr/bin/wp",
+  "headers": {
+    "CF-Access-Client-Id": "<ID_SERVICE_TOKEN>",
+    "CF-Access-Client-Secret": "<SECRETO_SERVICE_TOKEN>"
+  },
+  "push_url": "https://kuma.ejemplo.cl/api/push/<TOKEN_KUMA>"
+}
