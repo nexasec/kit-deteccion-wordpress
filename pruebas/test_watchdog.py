@@ -1,3 +1,4 @@
+import json
 import os
 
 import watchdog
@@ -90,3 +91,72 @@ def test_primera_corrida_crea_base_sin_alertar(tmp_path, monkeypatch):
     (raiz / "wp-content" / "uploads" / "shell.php").write_text("<?php")
     watchdog.main()
     assert enviados[0]["nuevos"] == [{"ruta": "wp-content/uploads/shell.php", "bytes": 5}]
+
+
+def _config(tmp_path, **valores):
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps(valores))
+    return str(cfg)
+
+
+def test_raiz_inexistente_late_down(tmp_path, monkeypatch):
+    monkeypatch.setenv("NX_CONFIG", _config(tmp_path, raiz_web=str(tmp_path / "no-existe")))
+    latidos = []
+    monkeypatch.setattr(watchdog, "latir", lambda c, estado, msg: latidos.append((estado, msg)))
+    watchdog.main()
+    assert latidos and latidos[-1][0] == "down"
+    assert "raiz_web" in latidos[-1][1]
+    assert not (tmp_path / "inventory-v2.json").exists()
+
+
+def test_raiz_sin_wp_content_late_down(tmp_path, monkeypatch):
+    (tmp_path / "otra-cosa").mkdir()
+    monkeypatch.setenv("NX_CONFIG", _config(tmp_path, raiz_web=str(tmp_path / "otra-cosa")))
+    latidos = []
+    monkeypatch.setattr(watchdog, "latir", lambda c, estado, msg: latidos.append((estado, msg)))
+    watchdog.main()
+    assert latidos[-1][0] == "down"
+
+
+class _Respuesta:
+    def __init__(self, tipo, cuerpo):
+        self.headers = {"Content-Type": tipo}
+        self._cuerpo = cuerpo
+
+    def read(self, *a):
+        return self._cuerpo
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def test_entrega_que_devuelve_html_no_cuenta(monkeypatch):
+    monkeypatch.setattr(watchdog.urllib.request, "urlopen",
+                        lambda req, timeout=None: _Respuesta("text/html; charset=utf-8", b"<html>login</html>"))
+    ok, detalle = watchdog.enviar_a_n8n({"webhook_watchdog": "https://n8n.ejemplo.cl/webhook/x"}, {"a": 1})
+    assert ok is False
+    assert "inesperada" in detalle
+
+
+def test_entrega_json_cuenta(monkeypatch):
+    monkeypatch.setattr(watchdog.urllib.request, "urlopen",
+                        lambda req, timeout=None: _Respuesta("application/json", b'{"ok":true}'))
+    ok, _ = watchdog.enviar_a_n8n({"webhook_watchdog": "https://n8n.ejemplo.cl/webhook/x"}, {"a": 1})
+    assert ok is True
+
+
+def test_fallo_de_entrega_conserva_la_base(tmp_path, monkeypatch):
+    raiz = _sitio(tmp_path)
+    monkeypatch.setenv("NX_CONFIG", _config(tmp_path, raiz_web=str(raiz)))
+    monkeypatch.setattr(watchdog, "latir", lambda c, estado, msg: None)
+    watchdog.main()  # linea base
+    (raiz / "wp-content" / "uploads" / "shell.php").write_text("<?php")
+    monkeypatch.setattr(watchdog, "enviar_a_n8n", lambda c, e: (False, "n8n caido"))
+    watchdog.main()
+    enviados = []
+    monkeypatch.setattr(watchdog, "enviar_a_n8n", lambda c, e: enviados.append(e) or (True, "entregado"))
+    watchdog.main()
+    assert enviados and enviados[0]["nuevos"][0]["ruta"] == "wp-content/uploads/shell.php"

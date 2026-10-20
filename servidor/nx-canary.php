@@ -98,7 +98,7 @@ function nx_ip_cliente(array $server, string $modo): array
 
 /*
  * Senuelo critico: la URL exacta de un archivo que estuvo expuesto (por ejemplo
- * un .wpress con sufijo aleatorio). Ese nombre no se adivina por fuerza bruta:
+ * un respaldo con un sufijo aleatorio en el nombre). Ese nombre no se adivina por fuerza bruta:
  * un golpe ahi significa que alguien capturo la URL mientras estuvo expuesta.
  * Eso no es ruido de escaner, es dirigido. Vacio = desactivado.
  */

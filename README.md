@@ -115,7 +115,7 @@ python3 -m venv .venv && .venv/bin/pip install pytest
 .venv/bin/pytest
 ```
 
-Las pruebas del canary necesitan `php` en el PATH; sin PHP se saltan. El CI corre todo en Python 3.8 y 3.12, con PHP 8.2.
+Las pruebas del canary necesitan `php` en el PATH; sin PHP se saltan. El CI corre todo en Python 3.9 y 3.12, con PHP 8.2.
 
 ## Lo que hacemos además
 

@@ -6,16 +6,19 @@
 # SetEnv NX_CONFIG /home/USUARIO/nx-kit/config.json
 
 # BEGIN NexaSec Origen
+# !!! VIENE COMENTADO A PROPOSITO. Reemplazar <NOMBRE_CABECERA> y <VALOR_SECRETO> por
+# !!! los de la Transform Rule y recien ahi quitar los '#' de las lineas de abajo.
+# !!! Pegado sin editar, deja TODO el sitio respondiendo 403.
 # Cierre del origen: solo responde a peticiones que traen la cabecera secreta
 # que agrega una Transform Rule de Cloudflare. Quien encuentre la IP del
 # servidor y le hable directo recibe 403. vigia.py --origen comprueba que esto
 # siga vigente: espera exactamente el cuerpo "Forbidden".
-<IfModule mod_rewrite.c>
-RewriteEngine On
-RewriteCond %{HTTP:<NOMBRE_CABECERA>} !^<VALOR_SECRETO>$
-RewriteRule ^ - [F]
-</IfModule>
-ErrorDocument 403 "Forbidden"
+# <IfModule mod_rewrite.c>
+# RewriteEngine On
+# RewriteCond %{HTTP:<NOMBRE_CABECERA>} !^<VALOR_SECRETO>$
+# RewriteRule ^ - [F]
+# </IfModule>
+# ErrorDocument 403 "Forbidden"
 # END NexaSec Origen
 
 # BEGIN NexaSec Canary

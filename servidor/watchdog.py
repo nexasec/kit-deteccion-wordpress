@@ -143,10 +143,15 @@ def enviar_a_n8n(cfg, evento):
         method="POST",
     )
     try:
-        urllib.request.urlopen(req, timeout=10).read()
-        return True, "entregado"
+        with urllib.request.urlopen(req, timeout=10) as r:
+            cuerpo = r.read(300).decode(errors="replace")
+            tipo = r.headers.get("Content-Type", "")
     except Exception as exc:  # noqa: BLE001 - el cron no debe morir por esto
         return False, "fallo entrega a n8n: %s" % exc
+    # Un 200 con HTML es una intercepcion (login de Access), no una entrega.
+    if "json" not in tipo:
+        return False, "respuesta inesperada de n8n: " + cuerpo[:80].replace("\n", " ")
+    return True, "entregado"
 
 
 def latir(cfg, estado, mensaje):
@@ -184,6 +189,11 @@ def latir(cfg, estado, mensaje):
         }))
 
 
+def guardar_base(ruta, inv):
+    with open(ruta, "w", encoding="utf-8") as fh:
+        json.dump(inv, fh, indent=1, sort_keys=True)
+
+
 def main():
     cfg = nxconfig.cargar_config()
     faltan = nxconfig.requerir(cfg, "raiz_web")
@@ -196,6 +206,14 @@ def main():
         return
 
     raiz = os.path.expanduser(cfg["raiz_web"])
+    # Una raiz equivocada (mal escrita, movida, sin permisos) da un inventario
+    # vacio que se ve igual que "no paso nada": se trata como falla del sensor.
+    if not os.path.isdir(os.path.join(raiz, "wp-content")):
+        msg = "raiz_web no es un WordPress legible: %s" % raiz
+        print(json.dumps({"origen": "watchdog", "error": msg}))
+        latir(cfg, "down", msg)
+        return
+
     base = os.path.join(nxconfig.dir_estado(cfg), BASE)
     actual = inventario(raiz)
 
@@ -205,11 +223,9 @@ def main():
     except (OSError, ValueError):
         previo = None
 
-    with open(base, "w", encoding="utf-8") as fh:
-        json.dump(actual, fh, indent=1, sort_keys=True)
-
     # Primera ejecucion: se establece la linea base sin alertar.
     if previo is None:
+        guardar_base(base, actual)
         print(json.dumps({"origen": "watchdog", "estado": "baseline_creada",
                           "vigilados": len(actual)}))
         latir(cfg, "up", "baseline creada, %d vigilados" % len(actual))
@@ -225,7 +241,10 @@ def main():
     # El latido lleva el resultado de la entrega: si n8n esta inalcanzable,
     # Kuma se pone en rojo y avisa por su propio canal. Sin esto, un fallo de
     # entrega se veria igual que "no ha pasado nada".
+    # La base solo avanza si el hallazgo llego: si n8n no respondio, la proxima
+    # corrida vuelve a reportar los mismos archivos en vez de perderlos.
     if entrega_ok:
+        guardar_base(base, actual)
         latir(cfg, "up", "ok, %d vigilados, %s" % (len(actual), detalle))
     else:
         latir(cfg, "down", detalle)
